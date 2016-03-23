@@ -50,7 +50,7 @@ def _make_vertices(*args):
 	vid_for = {}
 	if len(args)%2 != 0:
 		raise ValueError("missing command for name")
-	for i in range(len(args)/2):
+	for i in range(int(len(args)/2)):
 		name = args[i*2]
 		cmd = args[i*2+1]
 		assert _is_str(name)
