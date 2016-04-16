@@ -1,14 +1,15 @@
+# pylint: disable=multiple-statements,too-few-public-methods
 
 from __future__ import print_function
 
 import operator
 
+import gevent
+import gevent.queue
 import gevent.subprocess
-import goless
 
 from gdo._display import (_Display, _ProcStates)
-
-# pylint: disable=multiple-statements
+from gdo._sync import (_chan, _ChanClosed)
 
 class ExecError(Exception):
 	pass
@@ -195,15 +196,15 @@ def concurrent(rg, max_concurrent=int(0)):
 			q.append(rg.vertices[i])
 			to_complete += 1
 
-	jobs = goless.chan()
-	results = goless.chan()
+	jobs = _chan()
+	results = _chan()
 
 	def sendq():
 		for v in q:
 			jobs.send(v)
-	goless.go(sendq)
+	gevent.spawn(sendq)
 
-	goless.go(lambda: _dispatcher(jobs, results, max_concurrent))
+	gevent.spawn(_dispatcher, jobs.ro(), results.wo(), max_concurrent)
 
 	complete = 0
 	stop = False
@@ -211,7 +212,7 @@ def concurrent(rg, max_concurrent=int(0)):
 		res = None
 		try:
 			res = results.recv()
-		except goless.ChannelClosed:
+		except _ChanClosed:
 			break
 		complete += 1
 		if res.e is not None:
@@ -265,12 +266,12 @@ def _dispatcher(jobs, results, max_concurrent):
 			job = None
 			try:
 				job = jobs.recv()
-			except goless.ChannelClosed:
+			except _ChanClosed:
 				break
 			# need to use a separate factory function
 			# so that job is closed inside function
 			# instead of reusing job (which changes)
-			goless.go(_mk_run_job(job, results))
+			gevent.spawn(_run_job, job, results)
 		return
 
 	def worker():
@@ -278,14 +279,11 @@ def _dispatcher(jobs, results, max_concurrent):
 			job_w = None
 			try:
 				job_w = jobs.recv()
-			except goless.ChannelClosed:
+			except _ChanClosed:
 				break
 			_run_job(job_w, results)
 	for _ in range(max_concurrent):
-		goless.go(worker)
-
-def _mk_run_job(job, results):
-	return lambda: _run_job(job, results)
+		gevent.spawn(worker)
 
 def _run_job(job, results):
 	if callable(job.cmd):
