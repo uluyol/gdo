@@ -2,9 +2,11 @@
 from __future__ import print_function
 
 import operator
-import subprocess
 
+import gevent.subprocess
 import goless
+
+from gdo._display import (_Display, _ProcStates)
 
 # pylint: disable=multiple-statements
 
@@ -62,7 +64,7 @@ def _make_vertices(*args):
 
 class RunGraph(object):
 	"""RunGraph is the primary gdo type.
-	
+
 	RunGraphs are used to store the commands that must be executed
 	and dependencies between them. To execute a RunGraph, see
 	concurrent() and sequential().
@@ -177,6 +179,11 @@ def concurrent(rg, max_concurrent=int(0)):
 	assert isinstance(rg, RunGraph)
 	assert isinstance(max_concurrent, int)
 
+	display = _Display()
+	for v in rg.vertices:
+		display.append(v.name)
+	display.draw()
+
 	deps = [set() for _ in rg.vertices]
 	for e in rg.edges:
 		deps[e.dst].add(e.src)
@@ -210,9 +217,9 @@ def concurrent(rg, max_concurrent=int(0)):
 		if res.e is not None:
 			jobs.close()
 			stop = True
-			print("ERROR", res.v.name)
+			display.set(res.v.name, _ProcStates.ERR)
 		else:
-			print("DONE ", res.v.name)
+			display.set(res.v.name, _ProcStates.OK)
 			if not stop:
 				for e in _find_edges_from(rg.edges, res.v.vid):
 					deps[e.dst].remove(res.v.vid)
@@ -223,6 +230,8 @@ def concurrent(rg, max_concurrent=int(0)):
 			if not stop:
 				jobs.close()
 			break
+	display.skiprest()
+	display.draw(everything=True)
 	success = not stop
 	if not success:
 		raise ExecError("one or more of the tasks failed, see logs in " + rg.log_dir + " for details")
@@ -289,7 +298,7 @@ def _run_job(job, results):
 			return
 		results.send(_Result(job, None))
 		return
-	ret = subprocess.call(job.cmd)
+	ret = gevent.subprocess.call(job.cmd)
 	res = _Result(job, None)
 	if ret != 0:
 		res.e = ExecError("exit status " + str(ret))
