@@ -6,6 +6,7 @@ import operator
 
 import gevent
 import gevent.subprocess
+import gipc
 
 from gdo._display import (_Display, _ProcStates)
 from gdo._sync import (_chan, _ChanClosed)
@@ -296,19 +297,23 @@ def _dispatcher(job_signaler, jobs, results, max_concurrent):
 	for _ in range(max_concurrent):
 		gevent.spawn(worker)
 
-# TODO: Use a thread pool to execute python jobs
-
 def _run_job(job_signaler, job, results):
 	if callable(job.cmd):
-		try:
-			job.cmd()
-		except (KeyboardInterrupt, SystemExit):
-			raise
-		except Exception as e:
-			results.send(_Result(job, e))
-			return
-		results.send(_Result(job, None))
+		_run_job_python(job_signaler, job, results)
 		return
+	_run_job_shell(job_signaler, job, results)
+
+def _run_job_python(job_signaler, job, results):
+	res = _Result(job, None)
+	p = gipc.start_process(target=job.cmd)
+	job_signaler.add(res, p.terminate)
+	p.join()
+	job_signaler.rm(res)
+	if p.exitcode != 0 and res.e is None:
+		res.e = ExecError(p.exitcode)
+	results.send(res)
+
+def _run_job_shell(job_signaler, job, results):
 	res = _Result(job, None)
 	p = gevent.subprocess.Popen(job.cmd)
 	job_signaler.add(res, p.kill)
