@@ -5,7 +5,6 @@ from __future__ import print_function
 import operator
 
 import gevent
-import gevent.queue
 import gevent.subprocess
 
 from gdo._display import (_Display, _ProcStates)
