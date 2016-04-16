@@ -13,6 +13,9 @@ from gdo._sync import (_chan, _ChanClosed)
 class ExecError(Exception):
 	pass
 
+class InterruptError(ExecError):
+	pass
+
 def _is_str(x):
 	return isinstance(x, str) or isinstance(x, bytes)
 
@@ -195,6 +198,7 @@ def concurrent(rg, max_concurrent=int(0)):
 			q.append(rg.vertices[i])
 			to_complete += 1
 
+	job_signaler = _JobSignaler()
 	jobs = _chan()
 	results = _chan()
 
@@ -203,7 +207,7 @@ def concurrent(rg, max_concurrent=int(0)):
 			jobs.send(v)
 	gevent.spawn(sendq)
 
-	gevent.spawn(_dispatcher, jobs.ro(), results.wo(), max_concurrent)
+	gevent.spawn(_dispatcher, job_signaler, jobs.ro(), results.wo(), max_concurrent)
 
 	complete = 0
 	stop = False
@@ -213,11 +217,19 @@ def concurrent(rg, max_concurrent=int(0)):
 			res = results.recv()
 		except _ChanClosed:
 			break
+		except KeyboardInterrupt:
+			job_signaler.cancel_all()
+			continue
 		complete += 1
 		if res.e is not None:
 			jobs.close()
 			stop = True
-			display.set(res.v.name, _ProcStates.ERR)
+			if isinstance(res.e, InterruptError):
+				display.set(res.v.name, _ProcStates.INT)
+			elif isinstance(res.e, ExecError):
+				display.set(res.v.name, _ProcStates.ERR)
+			else:
+				raise RuntimeError
 		else:
 			display.set(res.v.name, _ProcStates.OK)
 			if not stop:
@@ -259,7 +271,7 @@ def _find_edges_from(edges, vid):
 		end += 1
 	return edges[eid:end+1]
 
-def _dispatcher(jobs, results, max_concurrent):
+def _dispatcher(job_signaler, jobs, results, max_concurrent):
 	if max_concurrent <= 0:
 		while True:
 			job = None
@@ -270,7 +282,7 @@ def _dispatcher(jobs, results, max_concurrent):
 			# need to use a separate factory function
 			# so that job is closed inside function
 			# instead of reusing job (which changes)
-			gevent.spawn(_run_job, job, results)
+			gevent.spawn(_run_job, job_signaler, job, results)
 		return
 
 	def worker():
@@ -280,11 +292,13 @@ def _dispatcher(jobs, results, max_concurrent):
 				job_w = jobs.recv()
 			except _ChanClosed:
 				break
-			_run_job(job_w, results)
+			_run_job(job_signaler, job_w, results)
 	for _ in range(max_concurrent):
 		gevent.spawn(worker)
 
-def _run_job(job, results):
+# TODO: Use a thread pool to execute python jobs
+
+def _run_job(job_signaler, job, results):
 	if callable(job.cmd):
 		try:
 			job.cmd()
@@ -295,9 +309,12 @@ def _run_job(job, results):
 			return
 		results.send(_Result(job, None))
 		return
-	ret = gevent.subprocess.call(job.cmd)
 	res = _Result(job, None)
-	if ret != 0:
+	p = gevent.subprocess.Popen(job.cmd)
+	job_signaler.add(res, p.kill)
+	ret = p.wait()
+	job_signaler.rm(res)
+	if ret != 0 and res.e is None:
 		res.e = ExecError("exit status " + str(ret))
 	results.send(res)
 
@@ -305,3 +322,18 @@ class _Result(object):
 	def __init__(self, vertex, err_code):
 		self.v = vertex
 		self.e = err_code
+
+class _JobSignaler(object):
+	def __init__(self):
+		self._jobs = {}
+
+	def add(self, result, cancel):
+		self._jobs[result] = cancel
+
+	def rm(self, result):
+		del self._jobs[result]
+
+	def cancel_all(self):
+		for result, cancel in self._jobs.items():
+			result.e = InterruptError()
+			cancel()
