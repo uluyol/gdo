@@ -45,7 +45,7 @@ class _Display(object):
 	def set(self, title, state):
 		assert state in _ProcStates
 		with self._mu:
-			row = filter(lambda row: row[1] == title, self._state)
+			row = list(filter(lambda row: row[1] == title, self._state))
 			assert len(row) == 1
 			row[0][0] = state
 			self.draw()
