@@ -1,6 +1,7 @@
 import unittest
 
 import gdo
+import gdo.errors
 
 class ValidationTest(unittest.TestCase):
 	def test(self):
@@ -38,7 +39,7 @@ class BasicConcurrentTest(unittest.TestCase):
 				"f", ("echo", "2"))
 			.req("f", "e")
 		)
-		with self.assertRaises(gdo.ExecError):
+		with self.assertRaises(gdo.errors.ExecError):
 			gdo.concurrent(
 				gdo.RunGraph(
 					"t", ("true",),
@@ -52,5 +53,5 @@ class BasicConcurrentTest(unittest.TestCase):
 		)
 		def f():
 			raise Exception
-		with self.assertRaises(gdo.ExecError):
+		with self.assertRaises(gdo.errors.ExecError):
 			gdo.concurrent(gdo.RunGraph("pyfn", f))
